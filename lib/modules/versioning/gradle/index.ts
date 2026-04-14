@@ -1,7 +1,7 @@
-import type { RangeStrategy } from '../../../types/versioning';
-import { regEx } from '../../../util/regex';
-import mavenVersion from '../maven';
-import type { NewValueConfig, VersioningApi } from '../types';
+import type { RangeStrategy } from '../../../types/versioning.ts';
+import { regEx } from '../../../util/regex.ts';
+import mavenVersion from '../maven/index.ts';
+import type { NewValueConfig, VersioningApi } from '../types.ts';
 import {
   TokenType,
   compare,
@@ -11,7 +11,7 @@ import {
   parseMavenBasedRange,
   parsePrefixRange,
   parseSingleVersionRange,
-} from './compare';
+} from './compare.ts';
 
 export const id = 'gradle';
 export const displayName = 'Gradle';
@@ -218,6 +218,35 @@ function getNewValue({
       // our version is already "+" which includes ever version
       return null;
     }
+  }
+
+  const mavenRange = parseMavenBasedRange(currentValue);
+  if (mavenRange?.preferredVal) {
+    const { leftVal, rightVal, preferredVal } = mavenRange;
+    const baseRange = currentValue.slice(
+      0,
+      currentValue.lastIndexOf(`!!${preferredVal}`),
+    );
+    const newBaseRange = mavenVersion.getNewValue({
+      currentValue: baseRange,
+      rangeStrategy,
+      newVersion,
+    });
+    // v8 ignore if: the implementation has a non-null return type
+    if (newBaseRange === null) {
+      return null;
+    }
+
+    const preferredIsBoundary =
+      preferredVal === leftVal || preferredVal === rightVal;
+    const newParsed = parseMavenBasedRange(newBaseRange);
+    const preferredStillPresent =
+      newParsed?.leftVal === preferredVal ||
+      newParsed?.rightVal === preferredVal;
+    const newPreferredVal =
+      preferredIsBoundary && !preferredStillPresent ? newVersion : preferredVal;
+
+    return `${newBaseRange}!!${newPreferredVal}`;
   }
 
   return mavenVersion.getNewValue({ currentValue, rangeStrategy, newVersion });

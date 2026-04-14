@@ -9,6 +9,7 @@ nav:
       - 'Self-hosted': 'self-hosted-configuration.md'
       - 'Presets': 'config-presets.md'
       - 'Validation': 'config-validation.md'
+      - 'JSON Schema': 'json-schema.md'
   - ... | mend-hosted
   - ... | key-concepts
   - ... | modules
@@ -50,6 +51,7 @@ nav:
       - 'Security Presets': 'presets-security.md'
       - 'Workaround Presets': 'presets-workarounds.md'
   - All Other:
+      - 'Community Tools': 'community-tools.md'
       - ... | user-stories
       - 'Security and Permissions': 'security-and-permissions.md'
       - 'Merge Confidence': 'merge-confidence.md'

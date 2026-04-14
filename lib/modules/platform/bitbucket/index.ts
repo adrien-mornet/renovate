@@ -1,23 +1,23 @@
-import URL from 'node:url';
 import { isNonEmptyArray, isNonEmptyString } from '@sindresorhus/is';
-import { GlobalConfig } from '../../../config/global';
-import { REPOSITORY_NOT_FOUND } from '../../../constants/error-messages';
-import { logger } from '../../../logger';
-import type { BranchStatus } from '../../../types';
-import { parseJson } from '../../../util/common';
-import * as git from '../../../util/git';
-import * as hostRules from '../../../util/host-rules';
-import type { BitbucketHttpOptions } from '../../../util/http/bitbucket';
-import { BitbucketHttp, setBaseUrl } from '../../../util/http/bitbucket';
-import { memCacheProvider } from '../../../util/http/cache/memory-http-cache-provider';
+import { GlobalConfig } from '../../../config/global.ts';
+import { REPOSITORY_NOT_FOUND } from '../../../constants/error-messages.ts';
+import { logger } from '../../../logger/index.ts';
+import type { BranchStatus } from '../../../types/index.ts';
+import { getInheritedOrGlobal, parseJson } from '../../../util/common.ts';
+import * as git from '../../../util/git/index.ts';
+import * as hostRules from '../../../util/host-rules.ts';
+import type { BitbucketHttpOptions } from '../../../util/http/bitbucket.ts';
+import { BitbucketHttp, setBaseUrl } from '../../../util/http/bitbucket.ts';
+import { memCacheProvider } from '../../../util/http/cache/memory-http-cache-provider.ts';
 import {
   aggressiveRepoCacheProvider,
   repoCacheProvider,
-} from '../../../util/http/cache/repository-http-cache-provider';
-import type { HttpOptions } from '../../../util/http/types';
-import { regEx } from '../../../util/regex';
-import { sanitize } from '../../../util/sanitize';
-import { UUIDRegex, matchRegexOrGlobList } from '../../../util/string-match';
+} from '../../../util/http/cache/repository-http-cache-provider.ts';
+import type { HttpOptions } from '../../../util/http/types.ts';
+import * as promises from '../../../util/promises.ts';
+import { regEx } from '../../../util/regex.ts';
+import { sanitize } from '../../../util/sanitize.ts';
+import { UUIDRegex, matchRegexOrGlobList } from '../../../util/string-match.ts';
 import type {
   AutodiscoverConfig,
   BranchStatusConfig,
@@ -35,13 +35,18 @@ import type {
   RepoParams,
   RepoResult,
   UpdatePrConfig,
-} from '../types';
-import { repoFingerprint } from '../util';
-import { smartTruncate } from '../utils/pr-body';
-import { readOnlyIssueBody } from '../utils/read-only-issue-body';
-import * as comments from './comments';
-import { BitbucketPrCache } from './pr-cache';
-import { RepoInfo, Repositories, UnresolvedPrTasks } from './schema';
+} from '../types.ts';
+import { repoFingerprint } from '../util.ts';
+import { smartTruncate } from '../utils/pr-body.ts';
+import { readOnlyIssueBody } from '../utils/read-only-issue-body.ts';
+import * as comments from './comments.ts';
+import { BitbucketPrCache } from './pr-cache.ts';
+import {
+  RepoInfo,
+  Repositories,
+  UnresolvedPrTasks,
+  WorkspaceAccesses,
+} from './schema.ts';
 import type {
   Account,
   BitbucketStatus,
@@ -51,9 +56,9 @@ import type {
   PagedResult,
   PrResponse,
   RepoBranchingModel,
-} from './types';
-import * as utils from './utils';
-import { mergeBodyTransformer } from './utils';
+} from './types.ts';
+import * as utils from './utils.ts';
+import { mergeBodyTransformer } from './utils.ts';
 
 export const id = 'bitbucket';
 
@@ -126,14 +131,47 @@ export async function initPlatform({
 export async function getRepos(config: AutodiscoverConfig): Promise<string[]> {
   logger.debug('Autodiscovering Bitbucket Cloud repositories');
   try {
-    let { body: repos } = await bitbucketHttp.getJson(
-      `/2.0/repositories/?role=contributor`,
-      { paginate: true },
-      Repositories,
+    // Determine which workspaces to query.
+    // If the caller supplied explicit namespaces use them directly;
+    // otherwise discover all workspaces the authenticated user belongs to.
+    // The old cross-workspace endpoint GET /2.0/repositories?role=contributor
+    // was removed by Bitbucket on 2026-03-31 (CHANGE-2770).
+    let workspaceSlugs: string[];
+    const autodiscoverNamespaces = config.namespaces;
+    if (isNonEmptyArray(autodiscoverNamespaces)) {
+      logger.debug(
+        { autodiscoverNamespaces },
+        'Using configured namespaces as Bitbucket workspaces',
+      );
+      workspaceSlugs = autodiscoverNamespaces;
+    } else {
+      logger.debug('Fetching Bitbucket workspaces for the current user');
+      const { body: slugs } = await bitbucketHttp.getJson(
+        '/2.0/user/workspaces',
+        { paginate: true },
+        WorkspaceAccesses,
+      );
+      workspaceSlugs = slugs;
+      logger.debug(
+        { workspaceSlugs },
+        `Found ${workspaceSlugs.length} Bitbucket workspace(s)`,
+      );
+    }
+
+    // Fetch repositories for every workspace in parallel (concurrency-limited).
+    const repoArrays = await promises.map(workspaceSlugs, (workspace) =>
+      bitbucketHttp
+        .getJson(
+          `/2.0/repositories/${workspace}`,
+          { paginate: true },
+          Repositories,
+        )
+        .then(({ body }) => body),
     );
 
-    // if autodiscoverProjects is configured
-    // filter the repos list
+    let repos = repoArrays.flat();
+
+    // if autodiscoverProjects is configured, filter the repos list
     const autodiscoverProjects = config.projects;
     if (isNonEmptyArray(autodiscoverProjects)) {
       logger.debug(
@@ -194,7 +232,6 @@ export async function initRepo({
   repository,
   cloneSubmodules,
   cloneSubmodulesFilter,
-  bbUseDevelopmentBranch,
 }: RepoParams): Promise<RepoResult> {
   logger.debug(`initRepo("${repository}")`);
   const opts = hostRules.find({
@@ -216,7 +253,7 @@ export async function initRepo({
 
     mainBranch = info.mainbranch;
 
-    if (bbUseDevelopmentBranch) {
+    if (getInheritedOrGlobal('bbUseDevelopmentBranch')) {
       // Fetch Bitbucket development branch
       const developmentBranch = (
         await bitbucketHttp.getJsonUnchecked<RepoBranchingModel>(
@@ -248,13 +285,13 @@ export async function initRepo({
     throw err;
   }
 
-  const { hostname } = URL.parse(defaults.endpoint);
+  const { hostname } = new URL(defaults.endpoint);
 
   // Converts API hostnames to their respective HTTP git hosts:
   // `api.bitbucket.org`  to `bitbucket.org`
   // `api-staging.<host>` to `staging.<host>`
   // TODO #22198
-  const hostnameWithoutApiPrefix = regEx(/api[.|-](.+)/).exec(hostname!)?.[1];
+  const hostnameWithoutApiPrefix = regEx(/api[.|-](.+)/).exec(hostname)?.[1];
 
   let auth = '';
   if (opts.token) {
@@ -559,13 +596,14 @@ async function findOpenIssues(title: string): Promise<BbIssue[]> {
       filters.push(`reporter.uuid="${renovateUserUuid}"`);
     }
     const filter = encodeURIComponent(filters.join(' AND '));
+    // v8 ignore next -- TODO: add test #40625
     return (
       (
         await bitbucketHttp.getJsonUnchecked<{ values: BbIssue[] }>(
           `/2.0/repositories/${config.repository}/issues?q=${filter}`,
           { cacheProvider: aggressiveRepoCacheProvider },
         )
-      ).body.values /* v8 ignore next */ || []
+      ).body.values || []
     );
   } catch (err) /* v8 ignore next */ {
     logger.warn({ err }, 'Error finding issues');
@@ -628,6 +666,7 @@ export function massageMarkdown(input: string): string {
       '$2',
     )
     .replace(regEx(`\n---\n\n.*?<!-- rebase-check -->.*?\n`), '')
+    .replace(regEx(/\]\(\.\.\/issues\//g), '](../../issues/')
     .replace(regEx(/\]\(\.\.\/pull\//g), '](../../pull-requests/')
     .replace(regEx(/<!--renovate-(?:debug|config-hash):.*?-->/g), '');
 

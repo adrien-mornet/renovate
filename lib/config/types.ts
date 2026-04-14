@@ -1,19 +1,20 @@
-import type { Category, PlatformId } from '../constants';
-import type { LogLevelRemap } from '../logger/types';
-import type { ManagerName } from '../manager-list.generated';
-import type { CustomManager } from '../modules/manager/custom/types';
-import type { RepoSortMethod, SortMethod } from '../modules/platform/types';
+import type { Category, PlatformId } from '../constants/index.ts';
+import type { LogLevelRemap } from '../logger/types.ts';
+import type { ManagerName } from '../manager-list.generated.ts';
+import type { CustomManager } from '../modules/manager/custom/types.ts';
+import type { RepoSortMethod, SortMethod } from '../modules/platform/types.ts';
 import type {
   AutoMergeType,
   HostRule,
   Nullish,
   RangeStrategy,
   SkipReason,
-} from '../types';
-import type { StageName } from '../types/skip-reason';
-import type { GitNoVerifyOption } from '../util/git/types';
-import type { MergeConfidence } from '../util/merge-confidence/types';
-import type { Timestamp } from '../util/timestamp';
+} from '../types/index.ts';
+import type { StageName } from '../types/skip-reason.ts';
+import type { ConstraintName, ToolName } from '../util/exec/types.ts';
+import type { GitNoVerifyOption } from '../util/git/types.ts';
+import type { MergeConfidence } from '../util/merge-confidence/types.ts';
+import type { Timestamp } from '../util/timestamp.ts';
 
 export type RenovateConfigStage =
   | 'global'
@@ -31,8 +32,7 @@ export type RenovateSplit =
   | 'update';
 
 export type RepositoryCacheConfig = 'disabled' | 'enabled' | 'reset';
-// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
-export type RepositoryCacheType = 'local' | string;
+export type RepositoryCacheType = 'local' | (string & {});
 export type DryRunConfig = 'extract' | 'lookup' | 'full';
 export type RequiredConfig = 'required' | 'optional' | 'ignored';
 
@@ -164,7 +164,17 @@ export interface RenovateSharedConfig {
  * Contains all options with globalOnly=true && inheritConfigSupport=true
  */
 export interface GlobalInheritableConfig {
+  bbUseDevelopmentBranch?: boolean;
   configFileNames?: string[];
+  onboarding?: boolean;
+  onboardingAutoCloseAge?: number;
+  onboardingBranch?: string;
+  onboardingCommitMessage?: string;
+  onboardingConfig?: RenovateConfig;
+  onboardingConfigFileName?: string;
+  onboardingNoDeps?: 'auto' | 'enabled' | 'disabled';
+  onboardingPrTitle?: string;
+  requireConfig?: RequiredConfig;
 }
 
 // Config options used only within the global worker
@@ -240,6 +250,7 @@ export interface RepoGlobalConfig extends GlobalInheritableConfig {
   localDir?: string;
   migratePresets?: Record<string, string>;
   platform?: PlatformId;
+  prCacheSyncMaxPages?: number;
   presetCachePersistence?: boolean;
   httpCacheTtlDays?: number;
   autodiscoverRepoSort?: RepoSortMethod;
@@ -249,10 +260,12 @@ export interface RepoGlobalConfig extends GlobalInheritableConfig {
   s3Endpoint?: string;
   s3PathStyle?: boolean;
   cachePrivatePackages?: boolean;
+  repositoryCacheForceLocal?: boolean;
   configFileNames?: string[];
   ignorePrAuthor?: boolean;
   allowedUnsafeExecutions?: AllowedUnsafeExecution[];
   onboardingAutoCloseAge?: number;
+  toolSettings?: ToolSettingsOptions;
 }
 
 /**
@@ -268,10 +281,8 @@ export interface LegacyAdminConfig {
 
   onboarding?: boolean;
   onboardingBranch?: string;
-  onboardingCommitMessage?: string;
   onboardingNoDeps?: 'auto' | 'enabled' | 'disabled';
   onboardingRebaseCheckbox?: boolean;
-  onboardingPrTitle?: string;
   onboardingConfig?: RenovateConfig;
   onboardingConfigFileName?: string;
 
@@ -296,6 +307,7 @@ export interface PostUpgradeTasks {
   dataFileTemplate?: string;
   fileFilters?: string[];
   executionMode: ExecutionMode;
+  installTools?: Partial<Record<ToolName, Record<never, never>>>;
 }
 
 export type UpdateConfig<
@@ -304,11 +316,9 @@ export type UpdateConfig<
 
 export type RenovateRepository =
   | string
-  | {
+  | (RenovateConfig & {
       repository: string;
-      secrets?: Record<string, string>;
-      variables?: Record<string, string>;
-    };
+    });
 
 export type UseBaseBranchConfigType = 'merge' | 'none';
 export type ConstraintsFilter = 'strict' | 'none';
@@ -350,7 +360,8 @@ export interface RenovateInternalConfig {
  * This is a superset of any configuration that a Renovate user (not self-hosted administrator) can set.
  */
 export interface RenovateConfig
-  extends LegacyAdminConfig,
+  extends
+    LegacyAdminConfig,
     RenovateSharedConfig,
     UpdateConfig<PackageRule>,
     AssigneesAndReviewersConfig,
@@ -358,6 +369,7 @@ export interface RenovateConfig
     RenovateInternalConfig {
   s3Endpoint?: string;
   s3PathStyle?: boolean;
+  reportFormatting?: boolean;
   reportPath?: string;
   reportType?: 'logging' | 'file' | 's3' | null;
   depName?: string;
@@ -406,6 +418,7 @@ export interface RenovateConfig
   branchConcurrentLimit?: number | null;
   parentOrg?: string;
   prConcurrentLimit?: number;
+  commitHourlyLimit?: number;
   prHourlyLimit?: number;
 
   printConfig?: boolean;
@@ -440,7 +453,7 @@ export interface RenovateConfig
   secrets?: Record<string, string>;
   variables?: Record<string, string>;
 
-  constraints?: Record<string, string>;
+  constraints?: Partial<Record<ConstraintName, string>>;
   skipInstalls?: boolean | null;
 
   constraintsFiltering?: ConstraintsFilter;
@@ -461,6 +474,7 @@ export interface RenovateConfig
   minimumGroupSize?: number;
   configFileNames?: string[];
   minimumReleaseAgeBehaviour?: MinimumReleaseAgeBehaviour;
+  toolSettings?: ToolSettingsOptions;
 }
 
 const CustomDatasourceFormats = [
@@ -483,9 +497,7 @@ export interface CustomDatasourceConfig {
  *
  */
 export interface AllConfig
-  extends RenovateConfig,
-    GlobalOnlyConfigLegacy,
-    RepoGlobalConfig {
+  extends RenovateConfig, GlobalOnlyConfigLegacy, RepoGlobalConfig {
   password?: string;
   token?: string;
   username?: string;
@@ -545,13 +557,14 @@ export type MergeStrategy =
   | 'squash';
 
 // This list should be added to as any new unsafe execution commands should be permitted
-export type AllowedUnsafeExecution = 'goGenerate' | 'gradleWrapper';
+export type AllowedUnsafeExecution =
+  | 'bazelModDeps'
+  | 'goGenerate'
+  | 'gradleWrapper';
 
 // TODO: Proper typings
 export interface PackageRule
-  extends RenovateSharedConfig,
-    RenovateInternalConfig,
-    UpdateConfig {
+  extends RenovateSharedConfig, RenovateInternalConfig, UpdateConfig {
   allowedVersions?: string;
   description?: string | string[];
   matchBaseBranches?: string[];
@@ -569,6 +582,7 @@ export interface PackageRule
   matchPackageNames?: string[];
   matchRepositories?: string[];
   matchSourceUrls?: string[];
+  matchRegistryUrls?: string[];
   matchUpdateTypes?: UpdateType[];
   matchJsonata?: string[];
   overrideDatasource?: string;
@@ -598,6 +612,7 @@ export type AllowedParents =
   | 'packageRules'
   | 'postUpgradeTasks'
   | 'vulnerabilityAlerts'
+  | 'toolSettings'
   | ManagerName
   | UpdateTypeOptions;
 export interface RenovateOptionBase {
@@ -801,4 +816,10 @@ export interface BumpVersionConfig {
   filePatterns: string[];
   matchStrings: string[];
   name?: string;
+}
+
+export interface ToolSettingsOptions {
+  jvmMaxMemory?: number;
+  jvmMemory?: number;
+  nodeMaxMemory?: number;
 }
